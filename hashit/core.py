@@ -19,12 +19,17 @@ class HashType(Enum):
     float32 = 0x3
     float64 = 0x4
 
-
 np2HashType = {}
 np2HashType[np.dtype('int32')] = HashType.int32
 np2HashType[np.dtype('int64')] = HashType.int64
 np2HashType[np.dtype('float32')] = HashType.float32
 np2HashType[np.dtype('float64')] = HashType.float64
+
+np2byte = {}
+np2byte[np.dtype('int32')] = 4
+np2byte[np.dtype('int64')] = 8
+np2byte[np.dtype('float32')] = 4
+np2byte[np.dtype('float64')] = 8
 
 hashType2np = {}
 hashType2np[HashType.int32.value] = np.dtype('int32')
@@ -44,13 +49,15 @@ def make_table_path(name):
 
 
 class NumpyTable(object):
-    def __init__(self, name, fixed_length=True):
+    def __init__(self, name, fixed_length=True, pad=True):
         self.db = redis.StrictRedis(host='localhost', port=6379, db=0)
         self.name = name
         self.path = None
         self.fhandle = None
         self.length = 0
-        self.sync_with_redis(fixed_length)
+        self.fixed_length = fixed_length
+        self.sync_with_redis()
+        self.pad = pad
 
     def clear_table(self):
         if self.fhandle is not None:
@@ -61,9 +68,9 @@ class NumpyTable(object):
         self.db.delete(self.name + '.idx_counter')
         self.db.delete(self.name + '.index')
         self.db.delete(self.name)
-        self.sync_with_redis(True)
+        self.sync_with_redis()
 
-    def sync_with_redis(self, fixed_length):
+    def sync_with_redis(self):
         tbl_exists = True
         name = self.db.get(self.name)
         if name is None:
@@ -142,11 +149,6 @@ class NumpyTable(object):
         self.set_idx(self.idx, start, end, typevalue, nparray.shape)
         self.set('length', self.length)
 
-    def read_array(self, start, stop, dtype):
-        self.fhandle.seek(start)
-        return np.frombuffer(self.read(stop-start), dtype=dtype)
-
-
     def __getitem__(self, key):
         if isinstance(key, slice):
             start, stop, step = key.start, key.stop, key.step
@@ -160,6 +162,36 @@ class NumpyTable(object):
 
         assert stop-start == total_bytes, 'Non-contiguous access not supported yet'
 
-        self.fhandle.seek(start)
-        data = np.frombuffer(self.fhandle.read(total_bytes), dtype=dtype)
-        return data.reshape(shape)
+        if self.fixed_length:
+            self.fhandle.seek(start)
+            data = np.frombuffer(self.fhandle.read(total_bytes), dtype=dtype)
+            return data.reshape(shape)
+        else:
+            self.fhandle.seek(start)
+            full_bytes = self.fhandle.read(total_bytes)
+            byte = np2byte[dtype]
+            if self.pad:
+                max_length = 0
+                global_start = start
+                for idx, start, end, dtype, local_shape in idx_values:
+                    max_length = max(max_length, (end-start)/byte)
+                batch = np.empty((shape[0], max_length), dtype=dtype)
+                for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
+                    start -= global_start
+                    end -= global_start
+                    batch[i, :(end-start)/byte] = np.frombuffer(full_bytes[start:end], dtype=dtype)
+                    batch[i, (end-start)/byte:] = 0
+                return batch
+            else:
+                batch = []
+                max_length = 0
+                global_start = start
+                for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
+                    start -= global_start
+                    end -= global_start
+                    batch.append(np.frombuffer(full_bytes[start:end], dtype=dtype))
+                return batch
+
+
+
+
