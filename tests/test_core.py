@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 
-from hashit.core import NumpyTable
+from diskhash.core import NumpyTable
 
 test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
 ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]

@@ -2,13 +2,13 @@ from __future__ import print_function
 from os.path import join
 from enum import Enum
 
+import cPickle as pickle
 import numpy as np
-import redis
 import mmap
 import os
 import sys
 
-from hashit.utils import Timer
+from diskhash.utils import Timer
 from numpy.testing import assert_array_equal
 
 t = Timer()
@@ -37,9 +37,23 @@ hashType2np[HashType.int64.value] = np.dtype('int64')
 hashType2np[HashType.float32.value] = np.dtype('float32')
 hashType2np[HashType.float64.value] = np.dtype('float64')
 
+def get_pickle_data(name):
+    home = os.environ['HOME']
+    pkl_file = join(home, '.diskhash', 'index.pkl')
+    if not os.path.exists(join(home, '.diskhash')):
+        os.mkdir(join(home, '.diskhash'))
+    if not os.path.exists(pkl_file):
+        with open(pkl_file, 'a'):
+            os.utime(pkl_file, None)
+        return False, pkl_file, {}
+    else:
+        index = pickle.load(open(pkl_file))
+
+        return True, pkl_file, index
+
 def make_table_path(name):
     home = os.environ['HOME']
-    base_dir = join(home, '.hashit')
+    base_dir = join(home, '.diskhash')
     if not os.path.exists(base_dir):
         os.mkdir(base_dir)
     if not os.path.exists(join(base_dir, name)):
@@ -50,53 +64,70 @@ def make_table_path(name):
 
 class NumpyTable(object):
     def __init__(self, name, fixed_length=True, pad=True):
-        self.db = redis.StrictRedis(host='localhost', port=6379, db=0)
+        self.db = None
         self.name = name
         self.path = None
+        self.index_path = join(os.environ['HOME'], '.diskhash', 'index.pkl')
         self.fhandle = None
         self.length = 0
         self.fixed_length = fixed_length
-        self.sync_with_redis()
         self.pad = pad
+
+    def init(self):
+        self.sync_with_pickle()
 
     def clear_table(self):
         if self.fhandle is not None:
             self.fhandle.close()
         if self.path is not None and os.path.exists(self.path):
             os.remove(self.path)
-        self.db.delete(self.name + '.length')
-        self.db.delete(self.name + '.idx_counter')
-        self.db.delete(self.name + '.index')
-        self.db.delete(self.name)
-        self.sync_with_redis()
+        tbl_path = make_table_path(self.name)
+        if os.path.exists(tbl_path):
+            os.remove(tbl_path)
+        if os.path.exists(join(os.environ['HOME'], '.diskhash', 'index.pkl')):
+            os.remove(join(os.environ['HOME'], '.diskhash', 'index.pkl'))
+        self.sync_with_pickle()
 
-    def sync_with_redis(self):
-        tbl_exists = True
-        name = self.db.get(self.name)
-        if name is None:
-            tbl_exists = False
+    def sync_with_pickle(self):
+        tbl_exists, path, index = get_pickle_data(self.name)
+        self.db = index
 
         if tbl_exists:
-            self.path = self.db.get(self.name)
+            self.path = self.db['path']
             self.fhandle = open(self.path, 'r+b')
-            self.length = int(self.get('length'))
-            self.idx = int(self.get('idx_counter'))
+            self.length = self.get('length')
+            self.idx = self.get('idx_counter')
         else:
             self.path = make_table_path(self.name)
             self.fhandle = open(self.path, 'r+b')
-            self.db.set(self.name, self.path)
+            self.db[self.name] = self.path
             self.set('length', 0)
             self.set('idx_counter', 0)
             self.length = 0
             self.idx = 0
+            self.write_index()
 
     def get(self, key):
-        return self.db.get(self.name + '.' + key)
+        return self.db[self.name + '.' + key]
 
     def set(self, key, value):
-        return self.db.set(self.name + '.' + key, value)
+        self.db[self.name + '.' + key] = value
+
+    def write_index(self):
+        error = True
+        while error:
+            pickle.dump(self.db, open(self.index_path + '.tmp', 'w'))
+            try:
+                idx = pickle.load(open(self.index_path + '.tmp'))
+            except:
+                continue
+            os.remove(self.index_path)
+            os.rename(self.index_path + '.tmp', self.index_path)
+            error = False
 
     def __del__(self):
+        self.write_index()
+
         self.fhandle.close()
 
     def set_idx(self, idx, start, end, dtype, shape):
@@ -105,17 +136,18 @@ class NumpyTable(object):
         for dim in shape:
             strvalue += ' ' + str(dim)
         key = self.name + '.index'
-        self.db.hmset(key, {str(idx) : strvalue})
+        if key not in self.db: self.db[key] = {}
+        self.db[key][idx] = strvalue
         self.idx +=1
         self.set('idx_counter', self.idx)
 
     def get_indices(self, indices):
         if isinstance(indices, list):
-            stridx = [str(idx) for idx in indices]
+            stridx = [idx for idx in indices]
         else:
-            stridx = [str(indices)]
+            stridx = [indices]
 
-        strvalues = self.db.hmget(self.name + '.index', stridx)
+        strvalues = [self.db[self.name + '.index'][idx] for idx in stridx]
         idx_values = []
         min_start = sys.maxint
         max_end = 0

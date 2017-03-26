@@ -9,7 +9,7 @@ def read(fname):
     return open(os.path.join(os.path.dirname(__file__), fname)).read()
 
 setup(
-    name = "hashit",
+    name = "diskhash",
     version = "0.0.1",
     author = "Tim Dettmers",
     author_email = "tim.dettmers@gmail.com",
@@ -17,7 +17,7 @@ setup(
     license = "MIT",
     keywords = "Numpy hashtable",
     url = "http://packages.python.org/spodernet",
-    packages=['hashit'],
+    packages=['diskhash'],
     test_suite="tests",
     long_description=read('README.md'),
     classifiers=[
