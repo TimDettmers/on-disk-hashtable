@@ -39,7 +39,7 @@ hashType2np[HashType.float64.value] = np.dtype('float64')
 
 def get_pickle_data(name):
     home = os.environ['HOME']
-    pkl_file = join(home, '.diskhash', 'index.pkl')
+    pkl_file = join(home, '.diskhash', name + '_index.pkl')
     if not os.path.exists(join(home, '.diskhash')):
         os.mkdir(join(home, '.diskhash'))
     if not os.path.exists(pkl_file):
@@ -67,7 +67,7 @@ class NumpyTable(object):
         self.db = None
         self.name = name
         self.path = None
-        self.index_path = join(os.environ['HOME'], '.diskhash', 'index.pkl')
+        self.index_path = join(os.environ['HOME'], '.diskhash', name + '_index.pkl')
         self.fhandle = None
         self.length = 0
         self.fixed_length = fixed_length
@@ -84,8 +84,8 @@ class NumpyTable(object):
         tbl_path = make_table_path(self.name)
         if os.path.exists(tbl_path):
             os.remove(tbl_path)
-        if os.path.exists(join(os.environ['HOME'], '.diskhash', 'index.pkl')):
-            os.remove(join(os.environ['HOME'], '.diskhash', 'index.pkl'))
+        if os.path.exists(self.index_path):
+            os.remove(self.index_path)
         self.sync_with_pickle()
 
     def sync_with_pickle(self):

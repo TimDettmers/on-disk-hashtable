@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 
 from diskhash.core import NumpyTable
+from diskhash.utils import Timer
 
 test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
 ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]
@@ -91,4 +92,37 @@ def test_append_variable_length_no_padding(dtype):
             x = expected_arr[idx]
             x2 = arr[idx]
             np.testing.assert_array_equal(x2, x.reshape(-1))
+
+
+test_data = [2, 4, 8, 10, 128, 1024]
+ids = ['chunk_size={0}'.format(chunk) for chunk in test_data]
+@pytest.mark.parametrize("numbers_per_vector", test_data, ids=ids)
+def test_random_access_speed(numbers_per_vector):
+    tbl = NumpyTable('test')
+    tbl.clear_table()
+    expected_data = []
+    for i in range(10000):
+        data = np.random.rand(1,numbers_per_vector)
+        expected_data.append(data)
+        tbl.append(data)
+
+    expected = np.vstack(expected_data)
+
+    rdm = np.random.RandomState(2345)
+    t = Timer()
+
+    length = 1
+    total_bytes = 0
+    for i in range(5000):
+        start = rdm.randint(0,10000-length,)
+        total_bytes += length*128*8
+        t.tick()
+        tbl[start:start+length]
+        t.tick()
+    time = t.tock()
+
+    MB = total_bytes/(1024**2.)
+    print('Reading random access at {0} MB/s or {1} bytes in {2} seconds in chunks of {3} bytes'.format(MB/time, total_bytes, time, expected.shape[1]*length*8))
+    assert MB/time > 50.0, 'Random access speed is below 50 MB/s for chunk size of {0}'.format(expected.shape[1]*length*8)
+
 
