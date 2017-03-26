@@ -1,5 +1,6 @@
 from __future__ import print_function
 import time
+import timeit
 
 class Timer(object):
     def __init__(self, silent=False):
@@ -9,13 +10,13 @@ class Timer(object):
 
     def tick(self, name='default'):
         if name not in self.current_ticks:
-            self.current_ticks[name] = time.time()
+            self.current_ticks[name] = timeit.default_timer()
 
             return 0.0
         else:
             if name not in self.cumulative_secs:
                 self.cumulative_secs[name] = 0
-            t = time.time()
+            t = timeit.default_timer()
             self.cumulative_secs[name] += t - self.current_ticks[name]
             self.current_ticks.pop(name)
 

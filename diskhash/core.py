@@ -93,7 +93,7 @@ class NumpyTable(object):
         self.db = index
 
         if tbl_exists:
-            self.path = self.db['path']
+            self.path = self.db[self.name]
             self.fhandle = open(self.path, 'r+b')
             self.length = self.get('length')
             self.idx = self.get('idx_counter')
