@@ -2,7 +2,7 @@ from __future__ import print_function
 from os.path import join
 from enum import Enum
 
-import cPickle as pickle
+import dill
 import numpy as np
 import mmap
 import os
@@ -37,7 +37,7 @@ hashType2np[HashType.int64.value] = np.dtype('int64')
 hashType2np[HashType.float32.value] = np.dtype('float32')
 hashType2np[HashType.float64.value] = np.dtype('float64')
 
-def get_pickle_data(name):
+def get_dill_data(name):
     home = os.environ['HOME']
     pkl_file = join(home, '.diskhash', name + '_index.pkl')
     if not os.path.exists(join(home, '.diskhash')):
@@ -47,7 +47,7 @@ def get_pickle_data(name):
             os.utime(pkl_file, None)
         return False, pkl_file, {}
     else:
-        index = pickle.load(open(pkl_file))
+        index = dill.load(open(pkl_file))
 
         return True, pkl_file, index
 
@@ -74,7 +74,7 @@ class NumpyTable(object):
         self.pad = pad
 
     def init(self):
-        self.sync_with_pickle()
+        self.sync_with_dill()
 
     def clear_table(self):
         if self.fhandle is not None:
@@ -86,10 +86,10 @@ class NumpyTable(object):
             os.remove(tbl_path)
         if os.path.exists(self.index_path):
             os.remove(self.index_path)
-        self.sync_with_pickle()
+        self.sync_with_dill()
 
-    def sync_with_pickle(self):
-        tbl_exists, path, index = get_pickle_data(self.name)
+    def sync_with_dill(self):
+        tbl_exists, path, index = get_dill_data(self.name)
         self.db = index
 
         if tbl_exists:
@@ -105,7 +105,14 @@ class NumpyTable(object):
             self.set('idx_counter', 0)
             self.length = 0
             self.idx = 0
+            self.db[self.name + '.indices'] = {}
+            self.db[self.name + '.index_funcs'] = {}
             self.write_index()
+
+    def add_index(self, index_name, index_func):
+        assert index_name not in self.db[self.name + '.indices'], 'Index already present, cannot be overwritten!'
+        self.db[self.name + '.indices'][index_name] =  {}
+        self.db[self.name + '.index_funcs'][index_name] = index_func
 
     def get(self, key):
         return self.db[self.name + '.' + key]
@@ -116,9 +123,9 @@ class NumpyTable(object):
     def write_index(self):
         error = True
         while error:
-            pickle.dump(self.db, open(self.index_path + '.tmp', 'w'))
+            dill.dump(self.db, open(self.index_path + '.tmp', 'w'))
             try:
-                idx = pickle.load(open(self.index_path + '.tmp'))
+                idx = dill.load(open(self.index_path + '.tmp'))
             except:
                 continue
             os.remove(self.index_path)
@@ -170,7 +177,12 @@ class NumpyTable(object):
             idx_values.append([idx, start, end, dtype, shape])
         return min_start, max_end, total_bytes, dtype, total_shape, idx_values
 
-    def append(self, nparray, idx=None):
+    def append(self, nparray):
+        for index_dict, func in zip(self.db[self.name + '.indices'], self.db[self.name + '.index_funcs']):
+            value = func(nparray)
+            if value not in index_dict: index_dict[value] = []
+            index_dict[value].append(self.idx)
+
         self.fhandle.seek(self.length)
         start = self.fhandle.tell()
         typevalue = np2HashType[nparray.dtype].value
@@ -181,6 +193,59 @@ class NumpyTable(object):
         self.set_idx(self.idx, start, end, typevalue, nparray.shape)
         self.set('length', self.length)
 
+    def padded_load(self, loaded_data, idx_values, samples, global_start):
+        max_length = 0
+        for idx, start, end, dtype, shape in idx_values:
+            max_length = max(max_length, (end-start))
+        byte = np2byte[dtype]
+        max_length /= byte
+        batch = np.empty((samples, max_length), dtype=dtype)
+        for i, (idx, start, end, dtype, shape) in enumerate(idx_values):
+            start -= global_start
+            end -= global_start
+            batch[i, :(end-start)/byte] = np.frombuffer(loaded_data[start:end], dtype=dtype)
+            batch[i, (end-start)/byte:] = 0
+        return batch
+
+    def unpadded_load(self, loaded_data, idx_values, global_start):
+        batch = []
+        for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
+            start -= global_start
+            end -= global_start
+            batch.append(np.frombuffer(loaded_data[start:end], dtype=dtype))
+        return batch
+
+    def variable_length_noncontiguous_load(self, idx_values, samples):
+        if self.pad:
+            max_length = 0
+            for idx, start, end, dtype, shape in idx_values:
+                max_length = max(max_length, (end-start))
+            byte = np2byte[dtype]
+            max_length /= byte
+            batch = np.empty((samples, max_length), dtype=dtype)
+            for i, (idx, start, end, dtype, shape) in enumerate(idx_values):
+                self.fhandle.seek(start)
+                data = self.fhandle.read(end-start)
+                batch[i, :(end-start)/byte] = np.frombuffer(data, dtype=dtype)
+                batch[i, (end-start)/byte:] = 0
+            return batch
+        else:
+            batch = []
+            for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
+                self.fhandle.seek(start)
+                data = self.fhandle.read(end-start)
+                batch.append(np.frombuffer(data, dtype=dtype))
+            return batch
+
+    def noncontiguous_load(self, idx_values, shape):
+        batch = np.empty(shape)
+        for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
+            self.fhandle.seek(start)
+            data = self.fhandle.read(end-start)
+            batch[i] = np.frombuffer(data, dtype=dtype)
+        return batch
+
+
     def __getitem__(self, key):
         if isinstance(key, slice):
             start, stop, step = key.start, key.stop, key.step
@@ -189,41 +254,34 @@ class NumpyTable(object):
             start, stop, total_bytes, dtype, shape, idx_values = self.get_indices(range(start, stop))
         elif isinstance(key, int):
             start, stop, total_bytes, dtype, shape, idx_values = self.get_indices(key)
+        elif isinstance(key, list):
+            start, stop, total_bytes, dtype, shape, idx_values = self.get_indices(key)
+        elif isinstance(key, np.ndarray):
+            start, stop, total_bytes, dtype, shape, idx_values = self.get_indices(key.tolist())
         else:
             raise Exception('Unsupported sice type: {0}'.format(type(key)))
 
-        assert stop-start == total_bytes, 'Non-contiguous access not supported yet'
-
-        if self.fixed_length:
-            self.fhandle.seek(start)
-            data = np.frombuffer(self.fhandle.read(total_bytes), dtype=dtype)
-            return data.reshape(shape)
-        else:
-            self.fhandle.seek(start)
-            full_bytes = self.fhandle.read(total_bytes)
-            byte = np2byte[dtype]
-            if self.pad:
-                max_length = 0
-                global_start = start
-                for idx, start, end, dtype, local_shape in idx_values:
-                    max_length = max(max_length, (end-start)/byte)
-                batch = np.empty((shape[0], max_length), dtype=dtype)
-                for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
-                    start -= global_start
-                    end -= global_start
-                    batch[i, :(end-start)/byte] = np.frombuffer(full_bytes[start:end], dtype=dtype)
-                    batch[i, (end-start)/byte:] = 0
-                return batch
+        do_contiguous_load = True
+        if stop-start != total_bytes:
+            if stop-start > total_bytes*2:
+                do_contiguous_load = False
+        if do_contiguous_load:
+            if self.fixed_length:
+                self.fhandle.seek(start)
+                data = np.frombuffer(self.fhandle.read(total_bytes), dtype=dtype)
+                return data.reshape(shape)
             else:
-                batch = []
-                max_length = 0
-                global_start = start
-                for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
-                    start -= global_start
-                    end -= global_start
-                    batch.append(np.frombuffer(full_bytes[start:end], dtype=dtype))
-                return batch
-
+                self.fhandle.seek(start)
+                loaded_data = self.fhandle.read(total_bytes)
+                if self.pad:
+                    return self.padded_load(loaded_data, idx_values, shape[0], start)
+                else:
+                    return self.unpadded_load(loaded_data, idx_values, start)
+        else:
+            if self.fixed_length:
+                return self.noncontiguous_load(idx_values, shape)
+            else:
+                return self.variable_length_noncontiguous_load(idx_values, shape[0])
 
 
 
