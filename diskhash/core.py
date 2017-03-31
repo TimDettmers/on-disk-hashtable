@@ -162,20 +162,47 @@ class NumpyTable(object):
         idx = self.rdm.choice(self.idx, batch_size, replace=False)
         return self[idx]
 
-    def get_random_index_batch(self, batch_size, index_name):
+    def get_random_index_batch(self, batch_size, index_name, where_indicies_set=None):
         index = self.db[self.name + '.indices'][index_name]
         i = 0
+        batches = []
         while True:
+            if i == 100: raise Exception('Index with a batch of size {0}, is unlikely to exist!'.format(batch_size))
+
             index_length_dict = self.db[self.name + '.index_length'][index_name]
             index_lengths = np.array(index_length_dict.values(), dtype=np.float32)
             index_lengths = index_lengths/np.sum(index_lengths)
             choice = self.rdm.choice(len(index.keys()), 1, p=index_lengths)
             index_key = index_length_dict.keys()[choice[0]]
             if len(index[index_key]) < batch_size: continue
-            if i == 1000: raise Exception('Index with a batch of size {0}, is unlikely to exist!'.format(batch_size))
 
-            idx = self.rdm.choice(len(index[index_key]), batch_size, replace=False)
-            return self[idx]
+            if where_indicies_set is not None:
+                filtered_index = []
+                for idx in index[index_key]:
+                    if idx not in where_indicies_set:
+                        filtered_index.append(idx)
+
+                if len(filtered_index) < batch_size: continue
+                else:
+                    idx = self.rdm.choice(filtered_index, batch_size, replace=False)
+                    return idx
+
+
+            if len(self.joined_tables) > 0:
+                for tbl in self.joined_tables:
+                    if index_name in tbl.db[tbl.name + '.indices']:
+                        joined_idx = tbl.get_random_index_batch(batch_size, index_name, where_indicies_set=index[index_key])
+                        batches += self[joined_idx]
+                    else:
+                        batches.append(tbl[idx])
+            else:
+                idx = self.rdm.choice(index[index_key], batch_size, replace=False)
+                batches.append(self[idx])
+
+            if len(batches) == 1:
+                return batches[0]
+            else:
+                return batches
 
     def get_indices(self, indices):
         if isinstance(indices, list):
@@ -293,7 +320,7 @@ class NumpyTable(object):
         elif isinstance(key, np.ndarray):
             start, stop, total_bytes, dtype, shape, idx_values = self.get_indices(key.tolist())
         else:
-            raise Exception('Unsupported sice type: {0}'.format(type(key)))
+            raise Exception('Unsupported slice type: {0}'.format(type(key)))
 
         do_contiguous_load = True
         if stop-start != total_bytes:

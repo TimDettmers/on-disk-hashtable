@@ -182,6 +182,7 @@ def test_variable_length_no_padding_np_indexing(dtype):
             x2 = arr[idx]
             np.testing.assert_array_equal(x2, x.reshape(-1))
 
+
 test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
 ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]
 @pytest.mark.parametrize("dtype", test_data, ids=ids)
@@ -259,6 +260,7 @@ def test_get_random_batch(dtype):
         for i in range(l):
             np.testing.assert_array_equal(batch1[i], batch2[i], 'Random batch not equal!')
 
+
 test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
 ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]
 @pytest.mark.parametrize("dtype", test_data, ids=ids)
@@ -281,6 +283,7 @@ def test_get_index_random_batch(dtype):
         else:
             data = np.array(np.random.rand(1,l), dtype=dtype)
         expected_data[l].append(data)
+        expected_indices[l].append(i)
         index_counts[l] +=1
 
         tbl.append(data)
@@ -293,8 +296,7 @@ def test_get_index_random_batch(dtype):
     for i in range(100):
         choice = rdm.choice(9,1, p=p)[0]
         idx = expected_data.keys()[choice]
-
-        batch_idx = rdm.choice(len(expected_data[idx]), batch_size, replace=False)
+        batch_idx = rdm.choice(expected_indices[idx], batch_size, replace=False)
 
         l = len(tbl[batch_idx])
         assert l == batch_size, 'Sample size of the fetched data not equal to the batch size!'
@@ -302,6 +304,7 @@ def test_get_index_random_batch(dtype):
         batch2 = tbl.get_random_index_batch(batch_size, 'test')
         for i in range(l):
             np.testing.assert_array_equal(batch1[i], batch2[i], 'Random batch not equal!')
+
 
 test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
 ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]
@@ -354,3 +357,41 @@ def test_join(dtype):
         for i in range(l):
             np.testing.assert_array_equal(batch11[i], batch21[i])
             np.testing.assert_array_equal(batch12[i], batch22[i])
+
+
+
+test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
+ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]
+@pytest.mark.parametrize("dtype", test_data, ids=ids)
+def test_joined_index_batch(dtype):
+    tbl1 = NumpyTable('test', fixed_length=False, pad=False)
+    tbl1.clear_table()
+    tbl1.add_index('test', lambda x: x.shape[1])
+    tbl2 = NumpyTable('test2', fixed_length=False, pad=False)
+    tbl2.clear_table()
+    tbl2.add_index('test', lambda x: x.shape[1])
+    tbls = [tbl1, tbl2]
+    tbl1.join(tbl2)
+
+    for tbl_idx in [0,1]:
+        for i in range(100):
+            l = np.random.randint(1,3)
+            if dtype == np.dtype('int32') or dtype == np.dtype('int64'):
+                data = np.array(np.random.randint(0,1000000, (1,l)), dtype=dtype)
+            else:
+                data = np.array(np.random.rand(1,l), dtype=dtype)
+
+            tbls[tbl_idx].append(data)
+
+    batch_size = 4
+    for i in range(100):
+        l = np.random.randint(1,3)
+        batches = tbl1.get_random_index_batch(batch_size, 'test')
+        assert len(batches) == 2, 'There should be two batches; one for each joined table.'
+        assert len(batches[0]) == len(batches[1]), 'Batches should have the same length.'
+        assert len(batches[0]) == batch_size, 'Batch length should be the batch size.'
+        l1 = batches[0][0].shape[0]
+        l2 = batches[1][0].shape[0]
+        for i in range(len(batches[0])):
+            assert batches[0][i].shape[0] == l1, 'All samples in a index batch should have the same length'
+            assert batches[1][i].shape[0] == l2, 'All samples in a index batch should have the same length'
