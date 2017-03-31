@@ -176,8 +176,49 @@ def test_variable_length_no_padding_np_indexing(dtype):
         for idx in indices:
             expected_arr.append(expected_data[idx])
 
-        assert len(arr) == len(expected_arr), 'Number of samples not equal: {0} but {1} was expected.'.format(arr.shape[0], len(expected))
+        assert len(arr) == len(expected_arr), 'Number of samples not equal: {0} but {1} was expected.'.format(arr.shape[0], len(expected, arr))
         for idx in range(len(arr)):
             x = expected_arr[idx]
             x2 = arr[idx]
+            np.testing.assert_array_equal(x2, x.reshape(-1))
+
+test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
+ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]
+@pytest.mark.parametrize("dtype", test_data, ids=ids)
+def test_index_select(dtype):
+    tbl = NumpyTable('test', fixed_length=False, pad=False)
+    tbl.clear_table()
+    tbl.add_index('test', lambda x: x.shape[1])
+    expected_data = {}
+    expected_indices = {}
+    for i in range(1,10):
+        expected_data[i] = []
+        expected_indices[i] = []
+
+    for i in range(100):
+        l = np.random.randint(1,10)
+        if dtype == np.dtype('int32') or dtype == np.dtype('int64'):
+            data = np.array(np.random.randint(0,1000000, (1,l)), dtype=dtype)
+        else:
+            data = np.array(np.random.rand(1,l), dtype=dtype)
+        expected_data[l].append(data)
+        expected_indices[l].append(i)
+
+        tbl.append(data)
+
+    for i in range(100):
+        l = np.random.randint(1,10)
+        limit = np.random.randint(2,100)
+        indices = tbl.select_index('test', where=l, limit=limit)
+        arr = tbl[indices]
+
+        expected_arr = expected_data[l][:limit]
+
+        np.testing.assert_array_equal(indices, expected_indices[l][:limit])
+        assert len(arr) == len(expected_arr), 'Number of samples not equal: {0} but {1} was expected.'.format(arr.shape[0], len(expected_arr))
+        for idx in range(len(arr)):
+            x = expected_arr[idx]
+            x2 = arr[idx]
+            x3 = tbl[indices[idx]]
+            np.testing.assert_array_equal(x, x3)
             np.testing.assert_array_equal(x2, x.reshape(-1))

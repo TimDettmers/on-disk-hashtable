@@ -95,14 +95,14 @@ class NumpyTable(object):
         if tbl_exists:
             self.path = self.db[self.name]
             self.fhandle = open(self.path, 'r+b')
-            self.length = self.get('length')
-            self.idx = self.get('idx_counter')
+            self.length = self.db[self.name + '.length']
+            self.idx = self.db[self.name + '.idx_counter']
         else:
             self.path = make_table_path(self.name)
             self.fhandle = open(self.path, 'r+b')
             self.db[self.name] = self.path
-            self.set('length', 0)
-            self.set('idx_counter', 0)
+            self.db[self.name + '.length'] = 0
+            self.db[self.name + '.idx_counter'] = 0
             self.length = 0
             self.idx = 0
             self.db[self.name + '.indices'] = {}
@@ -112,13 +112,17 @@ class NumpyTable(object):
     def add_index(self, index_name, index_func):
         assert index_name not in self.db[self.name + '.indices'], 'Index already present, cannot be overwritten!'
         self.db[self.name + '.indices'][index_name] =  {}
-        self.db[self.name + '.index_funcs'][index_name] = index_func
+        self.db[self.name + '.index_funcs'][index_name] = dill.dumps(index_func)
 
-    def get(self, key):
-        return self.db[self.name + '.' + key]
+    def select_index(self, index_name, where=None, limit=None):
+        index = self.db[self.name + '.indices'][index_name]
+        if where is not None:
+            index = index[where]
+        if limit is not None:
+            index = index[:limit]
 
-    def set(self, key, value):
-        self.db[self.name + '.' + key] = value
+        return index
+
 
     def write_index(self):
         error = True
@@ -134,7 +138,6 @@ class NumpyTable(object):
 
     def __del__(self):
         self.write_index()
-
         self.fhandle.close()
 
     def set_idx(self, idx, start, end, dtype, shape):
@@ -146,7 +149,7 @@ class NumpyTable(object):
         if key not in self.db: self.db[key] = {}
         self.db[key][idx] = strvalue
         self.idx +=1
-        self.set('idx_counter', self.idx)
+        self.db[self.name + '.idx_counter'] = self.idx
 
     def get_indices(self, indices):
         if isinstance(indices, list):
@@ -168,7 +171,6 @@ class NumpyTable(object):
             shape = [int(dim) for dim in values[3:]]
             min_start = min(start, min_start)
             max_end = max(end, max_end)
-            total_bytes += end - start
             if total_shape is None:
                 total_shape = shape
             else:
@@ -178,7 +180,10 @@ class NumpyTable(object):
         return min_start, max_end, total_bytes, dtype, total_shape, idx_values
 
     def append(self, nparray):
-        for index_dict, func in zip(self.db[self.name + '.indices'], self.db[self.name + '.index_funcs']):
+        for index_name in self.db[self.name + '.indices']:
+            index_dict = self.db[self.name + '.indices'][index_name]
+            strfunc = self.db[self.name + '.index_funcs'][index_name]
+            func = dill.loads(strfunc)
             value = func(nparray)
             if value not in index_dict: index_dict[value] = []
             index_dict[value].append(self.idx)
@@ -191,7 +196,7 @@ class NumpyTable(object):
         self.length += len(bytearr)
         end = self.fhandle.tell()
         self.set_idx(self.idx, start, end, typevalue, nparray.shape)
-        self.set('length', self.length)
+        self.db[self.name + '.length'] = self.length
 
     def padded_load(self, loaded_data, idx_values, samples, global_start):
         max_length = 0
@@ -265,13 +270,14 @@ class NumpyTable(object):
         if stop-start != total_bytes:
             if stop-start > total_bytes*2:
                 do_contiguous_load = False
+
         if do_contiguous_load:
             if self.fixed_length:
-                self.fhandle.seek(start)
+                self.fhandle.seek(stop-start)
                 data = np.frombuffer(self.fhandle.read(total_bytes), dtype=dtype)
                 return data.reshape(shape)
             else:
-                self.fhandle.seek(start)
+                self.fhandle.seek(stop-start)
                 loaded_data = self.fhandle.read(total_bytes)
                 if self.pad:
                     return self.padded_load(loaded_data, idx_values, shape[0], start)

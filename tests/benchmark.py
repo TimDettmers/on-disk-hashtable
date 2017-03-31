@@ -5,7 +5,7 @@ from diskhash.utils import Timer
 rdm = np.random.RandomState(2345)
 t = Timer()
 write = False
-numbers_per_vector = 32000
+numbers_per_vector = 3200
 
 if write:
     tbl = NumpyTable('test')
@@ -15,20 +15,16 @@ if write:
         data = np.random.rand(1,numbers_per_vector)
         expected_data.append(data)
         tbl.append(data)
-
-    expected = np.vstack(expected_data)
-
 else:
     tbl = NumpyTable('test')
     tbl.init()
-    length = 2
+    length = 10
     total_bytes = 0
-    for i in range(100):
+    t.tick()
+    for i in range(100000):
         start = rdm.randint(0,10000-length,)
         total_bytes += length*numbers_per_vector*8
-        t.tick()
         a = tbl[start:start+length]
-        t.tick()
     time = t.tock()
 
     MB = total_bytes/(1024**2.)
