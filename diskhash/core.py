@@ -72,6 +72,8 @@ class NumpyTable(object):
         self.length = 0
         self.fixed_length = fixed_length
         self.pad = pad
+        self.rdm = np.random.RandomState(234325)
+        self.joined_tables = []
 
     def init(self):
         self.sync_with_dill()
@@ -107,12 +109,17 @@ class NumpyTable(object):
             self.idx = 0
             self.db[self.name + '.indices'] = {}
             self.db[self.name + '.index_funcs'] = {}
+            self.db[self.name + '.index_length'] = {}
             self.write_index()
 
     def add_index(self, index_name, index_func):
         assert index_name not in self.db[self.name + '.indices'], 'Index already present, cannot be overwritten!'
         self.db[self.name + '.indices'][index_name] =  {}
         self.db[self.name + '.index_funcs'][index_name] = dill.dumps(index_func)
+        self.db[self.name + '.index_length'][index_name] =  {}
+
+    def join(self, tbl):
+        self.joined_tables.append(tbl)
 
     def select_index(self, index_name, where=None, limit=None):
         index = self.db[self.name + '.indices'][index_name]
@@ -151,6 +158,25 @@ class NumpyTable(object):
         self.idx +=1
         self.db[self.name + '.idx_counter'] = self.idx
 
+    def get_random_batch(self, batch_size):
+        idx = self.rdm.choice(self.idx, batch_size, replace=False)
+        return self[idx]
+
+    def get_random_index_batch(self, batch_size, index_name):
+        index = self.db[self.name + '.indices'][index_name]
+        i = 0
+        while True:
+            index_length_dict = self.db[self.name + '.index_length'][index_name]
+            index_lengths = np.array(index_length_dict.values(), dtype=np.float32)
+            index_lengths = index_lengths/np.sum(index_lengths)
+            choice = self.rdm.choice(len(index.keys()), 1, p=index_lengths)
+            index_key = index_length_dict.keys()[choice[0]]
+            if len(index[index_key]) < batch_size: continue
+            if i == 1000: raise Exception('Index with a batch of size {0}, is unlikely to exist!'.format(batch_size))
+
+            idx = self.rdm.choice(len(index[index_key]), batch_size, replace=False)
+            return self[idx]
+
     def get_indices(self, indices):
         if isinstance(indices, list):
             stridx = [idx for idx in indices]
@@ -185,8 +211,11 @@ class NumpyTable(object):
             strfunc = self.db[self.name + '.index_funcs'][index_name]
             func = dill.loads(strfunc)
             value = func(nparray)
-            if value not in index_dict: index_dict[value] = []
+            if value not in index_dict:
+                index_dict[value] = []
+                self.db[self.name + '.index_length'][index_name][value] = 0
             index_dict[value].append(self.idx)
+            self.db[self.name + '.index_length'][index_name][value] += 1
 
         self.fhandle.seek(self.length)
         start = self.fhandle.tell()
@@ -271,23 +300,32 @@ class NumpyTable(object):
             if stop-start > total_bytes*2:
                 do_contiguous_load = False
 
+        ret_data = []
+
         if do_contiguous_load:
             if self.fixed_length:
                 self.fhandle.seek(stop-start)
                 data = np.frombuffer(self.fhandle.read(total_bytes), dtype=dtype)
-                return data.reshape(shape)
+                ret_data.append(data.reshape(shape))
             else:
                 self.fhandle.seek(stop-start)
                 loaded_data = self.fhandle.read(total_bytes)
                 if self.pad:
-                    return self.padded_load(loaded_data, idx_values, shape[0], start)
+                    ret_data.append(self.padded_load(loaded_data, idx_values, shape[0], start))
                 else:
-                    return self.unpadded_load(loaded_data, idx_values, start)
+                    ret_data.append(self.unpadded_load(loaded_data, idx_values, start))
         else:
             if self.fixed_length:
-                return self.noncontiguous_load(idx_values, shape)
+                ret_data.append(self.noncontiguous_load(idx_values, shape))
             else:
-                return self.variable_length_noncontiguous_load(idx_values, shape[0])
+                ret_data.append(self.variable_length_noncontiguous_load(idx_values, shape[0]))
+
+        if len(self.joined_tables) > 0:
+            for tbl in self.joined_tables:
+                ret_data.append(tbl[key])
+            return ret_data
+        else:
+            return ret_data[0]
 
 
 
