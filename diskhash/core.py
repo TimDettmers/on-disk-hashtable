@@ -107,6 +107,7 @@ class NumpyTable(object):
             self.db[self.name + '.idx_counter'] = 0
             self.length = 0
             self.idx = 0
+            self.db[self.name + '.index'] = {}
             self.db[self.name + '.indices'] = {}
             self.db[self.name + '.index_funcs'] = {}
             self.db[self.name + '.index_length'] = {}
@@ -155,7 +156,6 @@ class NumpyTable(object):
         for dim in shape:
             strvalue += ' ' + str(dim)
         key = self.name + '.index'
-        if key not in self.db: self.db[key] = {}
         self.db[key][idx] = strvalue
         self.idx +=1
         self.db[self.name + '.idx_counter'] = self.idx
@@ -237,6 +237,7 @@ class NumpyTable(object):
 
     def append(self, nparray):
         if len(nparray.shape) == 1: nparray = nparray.reshape(1, -1)
+        if len(nparray.shape) == 0: nparray = nparray.reshape(1, 1)
         for index_name in self.db[self.name + '.indices']:
             index_dict = self.db[self.name + '.indices'][index_name]
             strfunc = self.db[self.name + '.index_funcs'][index_name]
