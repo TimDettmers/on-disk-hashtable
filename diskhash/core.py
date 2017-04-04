@@ -233,6 +233,7 @@ class NumpyTable(object):
         return min_start, max_end, total_bytes, dtype, total_shape, idx_values
 
     def append(self, nparray):
+        if len(nparray.shape) == 1: nparray = nparray.reshape(1, -1)
         for index_name in self.db[self.name + '.indices']:
             index_dict = self.db[self.name + '.indices'][index_name]
             strfunc = self.db[self.name + '.index_funcs'][index_name]
@@ -303,6 +304,8 @@ class NumpyTable(object):
         for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
             self.fhandle.seek(start)
             data = self.fhandle.read(end-start)
+            print(batch.shape)
+            print(np.frombuffer(data, dtype).shape)
             batch[i] = np.frombuffer(data, dtype=dtype)
         return batch
 

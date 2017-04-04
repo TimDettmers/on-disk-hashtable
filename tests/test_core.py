@@ -1,21 +1,24 @@
 import pytest
 import numpy as np
+import itertools
 
 from diskhash.core import NumpyTable
 from diskhash.utils import Timer
 
-test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
-ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]
-@pytest.mark.parametrize("dtype", test_data, ids=ids)
-def test_append(dtype):
+dtypes = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
+shapes = [(1, 100), (100,)]
+test_data = list(itertools.product(dtypes, shapes))
+ids = ['dtype={0},shape={1}'.format(dtype, shape) for dtype, shape in test_data]
+@pytest.mark.parametrize("dtype, shape", test_data, ids=ids)
+def test_append(dtype, shape):
     tbl = NumpyTable('test')
     tbl.clear_table()
     expected_data = []
     for i in range(100):
         if dtype == np.dtype('int32') or dtype == np.dtype('int64'):
-            data = np.array(np.random.randint(0,1000000, (1,100)), dtype=dtype)
+            data = np.array(np.random.randint(0,1000000, shape), dtype=dtype)
         else:
-            data = np.array(np.random.rand(1,100), dtype=dtype)
+            data = np.array(np.random.rand(*shape), dtype=dtype)
         expected_data.append(data)
         tbl.append(data)
 
