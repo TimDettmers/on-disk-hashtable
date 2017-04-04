@@ -224,6 +224,7 @@ class NumpyTable(object):
             shape = [int(dim) for dim in values[3:]]
             min_start = min(start, min_start)
             max_end = max(end, max_end)
+            total_bytes += end-start
             if total_shape is None:
                 total_shape = shape
             else:
@@ -250,8 +251,9 @@ class NumpyTable(object):
         typevalue = np2HashType[nparray.dtype].value
         bytearr = nparray.tobytes()
         self.fhandle.write(bytearr)
-        self.length += len(bytearr)
         end = self.fhandle.tell()
+        self.length += end-start
+        self.fhandle.seek(0) #this fixes a bug, but I do not know why; I do a seek(start) whenever I use the handle which should be fine
         self.set_idx(self.idx, start, end, typevalue, nparray.shape)
         self.db[self.name + '.length'] = self.length
 
@@ -304,8 +306,6 @@ class NumpyTable(object):
         for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
             self.fhandle.seek(start)
             data = self.fhandle.read(end-start)
-            print(batch.shape)
-            print(np.frombuffer(data, dtype).shape)
             batch[i] = np.frombuffer(data, dtype=dtype)
         return batch
 
@@ -334,12 +334,12 @@ class NumpyTable(object):
 
         if do_contiguous_load:
             if self.fixed_length:
-                self.fhandle.seek(stop-start)
-                data = np.frombuffer(self.fhandle.read(total_bytes), dtype=dtype)
+                self.fhandle.seek(start)
+                data = np.frombuffer(self.fhandle.read(stop-start), dtype=dtype)
                 ret_data.append(data.reshape(shape))
             else:
-                self.fhandle.seek(stop-start)
-                loaded_data = self.fhandle.read(total_bytes)
+                self.fhandle.seek(start)
+                loaded_data = self.fhandle.read(stop-start)
                 if self.pad:
                     ret_data.append(self.padded_load(loaded_data, idx_values, shape[0], start))
                 else:
