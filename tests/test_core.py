@@ -398,3 +398,42 @@ def test_joined_index_batch(dtype):
         for i in range(len(batches[0])):
             assert batches[0][i].shape[0] == l1, 'All samples in a index batch should have the same length'
             assert batches[1][i].shape[0] == l2, 'All samples in a index batch should have the same length'
+
+
+test_data = [(np.dtype('float64')), (np.dtype('float32')), (np.dtype('int32')), (np.dtype('int64'))]
+ids = ['dtype={0}'.format(str(dtype)) for dtype in test_data]
+@pytest.mark.parametrize("dtype", test_data, ids=ids)
+def test_get_items_with_index(dtype):
+    tbl = NumpyTable('test', fixed_length=False)
+    tbl.clear_table()
+    tbl.add_index('length', lambda x: x.shape[1])
+    expected_data = []
+    expected_lengths = []
+    for i in range(100):
+        l = np.random.randint(1,100)
+        if dtype == np.dtype('int32') or dtype == np.dtype('int64'):
+            data = np.array(np.random.randint(0,1000000, (1,l)), dtype=dtype)
+        else:
+            data = np.array(np.random.rand(1,l), dtype=dtype)
+        expected_data.append(data)
+        tbl.append(data)
+        expected_lengths.append(l)
+
+    for i in range(100):
+        start, stop = np.random.randint(0,100,2)
+        if start >= stop: continue
+        index, arr = tbl.get_items(range(start, stop), 'length')
+        expected_arr = expected_data[start:stop]
+        expected_l = expected_lengths[start:stop]
+
+        max_l = 0
+        for x in expected_arr:
+            max_l = max(max_l, x.shape[1])
+
+        assert arr.shape[1] == max_l, 'Array has the wrong maximum length. {0} but {1} was expected.'.format(arr.shape[1], max_l)
+        assert arr.shape[0] == len(expected_arr), 'Number of samples not equal: {0} but {1} was expected.'.format(arr.shape[0], len(expected))
+        for idx in range(stop-start):
+            x = expected_arr[idx]
+            np.testing.assert_array_equal(arr[idx][:x.shape[1]], x.reshape(-1))
+            np.testing.assert_array_equal(arr[idx][x.shape[1]:], np.zeros((max_l - x.shape[1])))
+            np.testing.assert_array_equal(expected_l[idx], index[idx])

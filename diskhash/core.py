@@ -110,6 +110,7 @@ class NumpyTable(object):
             self.db[self.name + '.indices'] = {}
             self.db[self.name + '.index_funcs'] = {}
             self.db[self.name + '.index_length'] = {}
+            self.db[self.name + '.idx2index_value'] = {}
             self.write_index()
 
     def add_index(self, index_name, index_func):
@@ -117,6 +118,7 @@ class NumpyTable(object):
         self.db[self.name + '.indices'][index_name] =  {}
         self.db[self.name + '.index_funcs'][index_name] = dill.dumps(index_func)
         self.db[self.name + '.index_length'][index_name] =  {}
+        self.db[self.name + '.idx2index_value'][index_name] =  {}
 
     def join(self, tbl):
         self.joined_tables.append(tbl)
@@ -162,7 +164,7 @@ class NumpyTable(object):
         idx = self.rdm.choice(self.idx, batch_size, replace=False)
         return self[idx]
 
-    def get_random_index_batch(self, batch_size, index_name, where_indicies_set=None):
+    def get_random_index_batch(self, batch_size, index_name, where_indices_set=None):
         index = self.db[self.name + '.indices'][index_name]
         i = 0
         batches = []
@@ -176,10 +178,10 @@ class NumpyTable(object):
             index_key = index_length_dict.keys()[choice[0]]
             if len(index[index_key]) < batch_size: continue
 
-            if where_indicies_set is not None:
+            if where_indices_set is not None:
                 filtered_index = []
                 for idx in index[index_key]:
-                    if idx not in where_indicies_set:
+                    if idx not in where_indices_set:
                         filtered_index.append(idx)
 
                 if len(filtered_index) < batch_size: continue
@@ -191,7 +193,7 @@ class NumpyTable(object):
             if len(self.joined_tables) > 0:
                 for tbl in self.joined_tables:
                     if index_name in tbl.db[tbl.name + '.indices']:
-                        joined_idx = tbl.get_random_index_batch(batch_size, index_name, where_indicies_set=index[index_key])
+                        joined_idx = tbl.get_random_index_batch(batch_size, index_name, where_indices_set=index[index_key])
                         batches += self[joined_idx]
                     else:
                         batches.append(tbl[idx])
@@ -245,6 +247,7 @@ class NumpyTable(object):
                 self.db[self.name + '.index_length'][index_name][value] = 0
             index_dict[value].append(self.idx)
             self.db[self.name + '.index_length'][index_name][value] += 1
+            self.db[self.name + '.idx2index_value'][index_name][self.idx] = value
 
         self.fhandle.seek(self.length)
         start = self.fhandle.tell()
@@ -310,7 +313,16 @@ class NumpyTable(object):
         return batch
 
 
-    def __getitem__(self, key):
+    def get_index_values(self, key, index_name):
+        if index_name not in self.db[self.name + '.idx2index_value']: return None
+
+        idx2index_value = self.db[self.name + '.idx2index_value'][index_name]
+        if not isinstance(key, list): key = [key]
+
+        return np.array([idx2index_value[idx] for idx in key if idx in idx2index_value])
+
+
+    def get_items(self, key, with_index_name=None):
         if isinstance(key, slice):
             start, stop, step = key.start, key.stop, key.step
             if step is not None:
@@ -350,12 +362,23 @@ class NumpyTable(object):
             else:
                 ret_data.append(self.variable_length_noncontiguous_load(idx_values, shape[0]))
 
+        if with_index_name is not None:
+            idx = self.get_index_values(key, with_index_name)
+            data = ret_data.pop(0)
+            if idx is not None:
+                ret_data.append([idx, data])
+            else:
+                ret_data.append([data])
+
         if len(self.joined_tables) > 0:
             for tbl in self.joined_tables:
-                ret_data.append(tbl[key])
+                ret_data.append(tbl.get_items(key, with_index_name))
+
+
             return ret_data
         else:
             return ret_data[0]
 
 
-
+    def __getitem__(self, key):
+         return self.get_items(key)
