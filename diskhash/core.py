@@ -63,7 +63,7 @@ def make_table_path(name):
 
 
 class NumpyTable(object):
-    def __init__(self, name, fixed_length=True, pad=True):
+    def __init__(self, name, fixed_length=True, pad=True, seed=234235):
         self.db = None
         self.name = name
         self.path = None
@@ -72,7 +72,7 @@ class NumpyTable(object):
         self.length = 0
         self.fixed_length = fixed_length
         self.pad = pad
-        self.rdm = np.random.RandomState(234325)
+        self.rdm = np.random.RandomState(seed)
         self.joined_tables = []
 
     def init(self):
@@ -124,6 +124,9 @@ class NumpyTable(object):
     def join(self, tbl):
         self.joined_tables.append(tbl)
 
+    def __len__(self):
+        return self.db[self.name + '.length']
+
     def select_index(self, index_name, where=None, limit=None):
         index = self.db[self.name + '.indices'][index_name]
         if where is not None:
@@ -160,14 +163,18 @@ class NumpyTable(object):
         self.idx +=1
         self.db[self.name + '.idx_counter'] = self.idx
 
-    def get_random_batch(self, batch_size):
+    def get_random_batch(self, batch_size, return_index=False):
         idx = self.rdm.choice(self.idx, batch_size, replace=False)
-        return self[idx]
+        if return_index:
+            return self[idx], np.array(idx)
+        else:
+            return self[idx]
 
-    def get_random_index_batch(self, batch_size, index_name, where_indices_set=None):
+    def get_random_index_batch(self, batch_size, index_name, where_indices_set=None, return_index=False):
         index = self.db[self.name + '.indices'][index_name]
         i = 0
         batches = []
+        used_index = None
         while True:
             if i == 100: raise Exception('Index with a batch of size {0}, is unlikely to exist!'.format(batch_size))
 
@@ -200,11 +207,16 @@ class NumpyTable(object):
             else:
                 idx = self.rdm.choice(index[index_key], batch_size, replace=False)
                 batches.append(self[idx])
-
-            if len(batches) == 1:
-                return batches[0]
+            if return_index:
+                if len(batches) == 1:
+                    return batches[0], idx
+                else:
+                    return batches, idx
             else:
-                return batches
+                if len(batches) == 1:
+                    return batches[0]
+                else:
+                    return batches
 
     def get_indices(self, indices):
         if isinstance(indices, list):
