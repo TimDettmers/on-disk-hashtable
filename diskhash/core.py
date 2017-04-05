@@ -37,11 +37,12 @@ hashType2np[HashType.int64.value] = np.dtype('int64')
 hashType2np[HashType.float32.value] = np.dtype('float32')
 hashType2np[HashType.float64.value] = np.dtype('float64')
 
-def get_dill_data(name):
-    home = os.environ['HOME']
-    pkl_file = join(home, '.diskhash', name + '_index.pkl')
-    if not os.path.exists(join(home, '.diskhash')):
-        os.mkdir(join(home, '.diskhash'))
+def get_dill_data(name, base_path=None):
+    home = base_path or join(os.environ['HOME'], '.diskhash')
+    pkl_file = join(home, name + '_index.pkl')
+    print(home, pkl_file, name)
+    if not os.path.exists(home):
+        os.mkdir(home)
     if not os.path.exists(pkl_file):
         with open(pkl_file, 'a'):
             os.utime(pkl_file, None)
@@ -51,9 +52,9 @@ def get_dill_data(name):
 
         return True, pkl_file, index
 
-def make_table_path(name):
+def make_table_path(name, base_path=None):
     home = os.environ['HOME']
-    base_dir = join(home, '.diskhash')
+    base_dir = base_path or join(home, '.diskhash')
     if not os.path.exists(base_dir):
         os.mkdir(base_dir)
     if not os.path.exists(join(base_dir, name)):
@@ -63,17 +64,22 @@ def make_table_path(name):
 
 
 class NumpyTable(object):
-    def __init__(self, name, fixed_length=True, pad=True, seed=234235):
+    def __init__(self, name, fixed_length=True, pad=True, seed=234235, base_path=None):
         self.db = None
         self.name = name
-        self.path = None
-        self.index_path = join(os.environ['HOME'], '.diskhash', name + '_index.pkl')
+        if base_path is not None:
+            self.path = join(base_path, name)
+            self.index_path = join(base_path, name + '_index.pkl')
+        else:
+            self.path = None
+            self.index_path = join(os.environ['HOME'], '.diskhash', name + '_index.pkl')
         self.fhandle = None
         self.length = 0
         self.fixed_length = fixed_length
         self.pad = pad
         self.rdm = np.random.RandomState(seed)
         self.joined_tables = []
+        self.base_path = base_path
 
     def init(self):
         self.sync_with_dill()
@@ -91,7 +97,7 @@ class NumpyTable(object):
         self.sync_with_dill()
 
     def sync_with_dill(self):
-        tbl_exists, path, index = get_dill_data(self.name)
+        tbl_exists, path, index = get_dill_data(self.name, self.base_path)
         self.db = index
 
         if tbl_exists:
@@ -100,7 +106,7 @@ class NumpyTable(object):
             self.length = self.db[self.name + '.length']
             self.idx = self.db[self.name + '.idx_counter']
         else:
-            self.path = make_table_path(self.name)
+            self.path = make_table_path(self.name, self.base_path)
             self.fhandle = open(self.path, 'r+b')
             self.db[self.name] = self.path
             self.db[self.name + '.length'] = 0
@@ -125,7 +131,7 @@ class NumpyTable(object):
         self.joined_tables.append(tbl)
 
     def __len__(self):
-        return self.db[self.name + '.length']
+        return self.db[self.name + '.idx_counter']
 
     def select_index(self, index_name, where=None, limit=None):
         index = self.db[self.name + '.indices'][index_name]
@@ -166,7 +172,7 @@ class NumpyTable(object):
     def get_random_batch(self, batch_size, return_index=False):
         idx = self.rdm.choice(self.idx, batch_size, replace=False)
         if return_index:
-            return self[idx], np.array(idx)
+            return self[idx], np.array(idx, dtype=np.int32)
         else:
             return self[idx]
 
@@ -176,7 +182,7 @@ class NumpyTable(object):
         batches = []
         used_index = None
         while True:
-            if i == 100: raise Exception('Index with a batch of size {0}, is unlikely to exist!'.format(batch_size))
+            if i == 100: raise Exception('Index with a batch of size {0} is unlikely to exist!'.format(batch_size))
 
             index_length_dict = self.db[self.name + '.index_length'][index_name]
             index_lengths = np.array(index_length_dict.values(), dtype=np.float32)
@@ -198,20 +204,22 @@ class NumpyTable(object):
 
 
             if len(self.joined_tables) > 0:
+                joined_idx = index[index_key]
                 for tbl in self.joined_tables:
                     if index_name in tbl.db[tbl.name + '.indices']:
-                        joined_idx = tbl.get_random_index_batch(batch_size, index_name, where_indices_set=index[index_key])
-                        batches += self[joined_idx]
-                    else:
-                        batches.append(tbl[idx])
+                        joined_idx = tbl.get_random_index_batch(batch_size, index_name, where_indices_set=joined_idx)
+
+                for tbl in self.joined_tables:
+                    batches = self[joined_idx]
+                idx = joined_idx
             else:
                 idx = self.rdm.choice(index[index_key], batch_size, replace=False)
                 batches.append(self[idx])
             if return_index:
                 if len(batches) == 1:
-                    return batches[0], idx
+                    return batches[0], np.int32(idx)
                 else:
-                    return batches, idx
+                    return batches, np.int32(idx)
             else:
                 if len(batches) == 1:
                     return batches[0]
@@ -318,7 +326,7 @@ class NumpyTable(object):
             return batch
 
     def noncontiguous_load(self, idx_values, shape):
-        batch = np.empty(shape)
+        batch = np.empty(shape, dtype=idx_values[0][3])
         for i, (idx, start, end, dtype, local_shape) in enumerate(idx_values):
             self.fhandle.seek(start)
             data = self.fhandle.read(end-start)
